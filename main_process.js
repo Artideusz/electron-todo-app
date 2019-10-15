@@ -1,7 +1,7 @@
-const {app, BrowserWindow, ipcMain, Menu } = require('electron');
+const {app, ipcMain, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
-
+const { createBasicWindow } = require('./main_src/window');
 
 //Do something with those variables, they just can't be here.
 
@@ -11,8 +11,12 @@ app.on('ready',()=>{
     main = createBasicWindow({
         width: 1000,
         height:600, 
-        url:'pages/main.html',
-        template : mainTemplate
+        url:'pages/no_project.html',
+        template : mainTemplate,
+        show : false
+    })
+    main.webContents.on('did-finish-load',()=>{
+        main.show();
     })
     main.on('closed',()=>{
         app.quit();
@@ -22,17 +26,41 @@ app.on('ready',()=>{
 // Project creation in appdata
 
 ipcMain.on('project:create', async(e, projectName)=>{
+    listWindow.close();
     items = { 'Example' : [{'name':'example task'}], '$DONE' : []}
     projName = projectName;
     projectPath = path.join(app.getPath('userData'),projectName);
-    save();
+    main.loadFile('pages/main.html');
+    main.webContents.on('did-finish-load',()=>{
+        save();        
+    })
 })
 
 ipcMain.on('project:open',async(e,projectName)=>{
     listWindow.close();
     projName = projectName;
     projectPath = path.join(app.getPath('userData'),projectName);
-    load();
+    main.loadFile('pages/main.html');
+    main.webContents.on('did-finish-load',()=>{
+        load();        
+    })
+})
+
+ipcMain.on('project:delete',async(e,projectName)=>{
+    listWindow.close();
+    await new Promise((rs,rj)=>{
+        let pathToProject = path.join(app.getPath('userData'),projectName);
+        fs.unlink(pathToProject,(e)=>{
+            if(e){
+                rj(console.error(e));
+            }else{
+                rs('Todo file successfully deleted');
+                projName = null;
+                projectPath = null;
+            }
+        })
+    })
+    main.loadFile('pages/no_project.html');
 })
 
 
@@ -43,7 +71,8 @@ ipcMain.on('folder:edit:open',(e,foldername)=>{
             width : 350,
             height : 250,
             template : 'none',
-            aot:true
+            aot:true,
+            parentWindow:main
         })
         editFolder.webContents.on('did-finish-load',()=>{
             editFolder.webContents.send('content:send','editFolder', { folders : foldername });
@@ -61,7 +90,8 @@ ipcMain.on('folder:add:open',(e)=>{
             width : 350,
             height : 250,
             template : 'none',
-            aot:true
+            aot:true,
+            parentWindow:main
         })
         addFolder.webContents.on('did-finish-load',()=>{
             addFolder.webContents.send('content:send','addFolder');
@@ -73,7 +103,7 @@ ipcMain.on('folder:add:open',(e)=>{
 })
 
 
-ipcMain.on('folder:update',(e, cmd, { folderName=null, newFolderName=null }={})=>{
+ipcMain.on('folder:update',(e, cmd, { folderName=null, newFolderName=null, window_id=null }={})=>{
     if(projectPath){
         switch(cmd){
             case 'add':
@@ -82,12 +112,21 @@ ipcMain.on('folder:update',(e, cmd, { folderName=null, newFolderName=null }={})=
                     items[newFolderName] = [];
                 }
                 break;
+            case 'addRemote':
+                BrowserWindow.fromId(window_id).close();
+                items[newFolderName] = [];
+                break;
             case 'edit':
                 if(editFolder){
                     editFolder.close();
                     items[newFolderName] = items[folderName];
                     delete items[folderName];
                 }
+                break;
+            case 'editRemote':
+                    BrowserWindow.fromId(window_id).close();
+                    items[newFolderName] = items[folderName];
+                    delete items[folderName];
                 break;
             case 'delete':
                     delete items[folderName];
@@ -97,7 +136,7 @@ ipcMain.on('folder:update',(e, cmd, { folderName=null, newFolderName=null }={})=
     }
 })
 
-ipcMain.on('item:update',(e, cmd, { folderName=null, itemName=null, newFolderName=null, newItemName=null }={})=>{
+ipcMain.on('item:update',(e, cmd, { folderName = null, itemName = null, newItemName = null, window_id = null }={})=>{
     if(projectPath){
         switch(cmd){
             case 'add':
@@ -105,6 +144,10 @@ ipcMain.on('item:update',(e, cmd, { folderName=null, itemName=null, newFolderNam
                     addTaskWindow.close();
                     items[folderName].unshift({'name': itemName});
                 }
+                break;
+            case 'addRemote':
+                    BrowserWindow.fromId(window_id).close();
+                    items[folderName].unshift({'name': itemName});
                 break;
             case 'delete':
                 let folder = items[folderName];
@@ -117,6 +160,10 @@ ipcMain.on('item:update',(e, cmd, { folderName=null, itemName=null, newFolderNam
                     let index = items[folderName].map(v=>v.name).indexOf(itemName);
                     items[folderName][index].name = newItemName;     
                 }
+                break;
+            case 'editRemote':
+                    BrowserWindow.fromId(window_id).close();
+                    items[folderName][items[folderName].map(v=>v.name).indexOf(itemName)].name = newItemName;
                 break;
             case 'done':
                 let x = items[folderName].splice(items[folderName].indexOf(items[folderName].find(v=>v.name===itemName)),1)[0]
@@ -132,27 +179,6 @@ ipcMain.on('item:update',(e, cmd, { folderName=null, itemName=null, newFolderNam
 })
 
 
-//listen for window for editing
-
-//Change to remote********************************
-
-ipcMain.on('item:edit:open',(e,x,cat)=>{
-    if(!editTaskWindow){
-        editTaskWindow = createBasicWindow({
-            url : 'pages/updateItem.html',
-            width : 350,
-            height : 250,
-            template : 'none',
-            aot:true
-        })
-        editTaskWindow.webContents.on('did-finish-load',()=>{
-            editTaskWindow.webContents.send('content:send','editTask', { folders : cat, item : x });
-        })
-        editTaskWindow.on('close',()=>{
-            editTaskWindow = null;
-        })
-    }
-})
 
 
 
@@ -175,26 +201,9 @@ function getList(){
     })
 }
 
-function createBasicWindow({url='index.html', width=800, height=600, template=null, frame=true, node=true, aot=false, show=true}={}){
-    let x =  new BrowserWindow({
-        width:width,
-        height:height,
-        frame:frame,
-        alwaysOnTop : aot,
-        webPreferences :{
-            nodeIntegration : node
-        },
-        show : show
-    })
-    x.loadFile(url);
-    if(template === 'none'){
-        x.setMenu(null);
-    }else if(template){
-        let menu = Menu.buildFromTemplate(template);
-        x.setMenu(menu);
-    }
-    return x;
-}
+//optimize
+
+
 
 function loadFile(method,path){
     switch(method.toLowerCase()){
@@ -233,7 +242,7 @@ async function save(){
 async function load(){
     let x = await loadFile('get',projectPath);
     items = JSON.parse(x);
-    main.webContents.send('todo:send', items, projName);
+    main.webContents.send('todo:send', items, projName, main);
 }
 
 const mainTemplate = [
@@ -244,18 +253,19 @@ const mainTemplate = [
                 label:'Add Todo Folder',
                 accelerator : 'Ctrl+Shift+A',
                 click(){
-                    addFolder = createBasicWindow({
+                    x = createBasicWindow({
                         url : 'pages/updateFolder.html',
                         width : 350,
                         height : 250,
                         template : 'none',
-                        aot:true
+                        aot:true,
+                        parentWindow:main
                     })
-                    addFolder.webContents.on('did-finish-load',()=>{
-                        addFolder.webContents.send('content:send','addFolder');
+                    x.webContents.on('did-finish-load',()=>{
+                        x.webContents.send('content:send','addFolder',{ window_id : x.id });
                     })
-                    addFolder.on('close',()=>{
-                        addFolder = null;
+                    x.on('close',()=>{
+                        x = null;
                     })
                 }
             },
@@ -264,17 +274,18 @@ const mainTemplate = [
                 accelerator : 'Ctrl+Shift+B',
                 click(){
                     if(projectPath){
-                        addTaskWindow = createBasicWindow({
+                        let x = createBasicWindow({
                             url:'pages/updateItem.html',
                             width:350,
                             height:250,
-                            template:'none'
+                            template:'none',
+                            parentWindow:main
                         });
-                        addTaskWindow.webContents.on('did-finish-load',()=>{
-                            addTaskWindow.webContents.send('content:send','addTask',{ folders : Object.keys(items)});
+                        x.webContents.on('did-finish-load',()=>{
+                            x.webContents.send('content:send','addTask',{ folders : Object.keys(items), window_id : x.id });
                         })
-                        addTaskWindow.on('close',()=>{
-                            addTaskWindow = null;
+                        x.on('close',()=>{
+                            x = null;
                         })                        
                     }
                 }
@@ -288,7 +299,8 @@ const mainTemplate = [
                         width : 300,
                         height : 200,
                         template : 'none',
-                        aot : true
+                        aot : true,
+                        parentWindow:main
                     })
                     listWindow.on('close',()=>{
                         listWindow = null;
@@ -300,7 +312,26 @@ const mainTemplate = [
                 accelerator : 'Ctrl+Shift+P',
                 async click(){
                     listWindow = createBasicWindow({
-                        url : 'pages/openProj.html',
+                        url : 'pages/updateProject.html',
+                        width : 300,
+                        height : 200,
+                        template : 'none',
+                        parentWindow:main
+                    })
+                    listWindow.webContents.on('did-finish-load',async()=>{
+                        let x = await getList();
+                        listWindow.webContents.send('todo:send',x,'open');
+                    })
+                    listWindow.on('close',()=>{
+                        listWindow = null;
+                    })
+                }
+            },
+            {
+                label:'Delete List',
+                async click(){
+                    listWindow = createBasicWindow({
+                        url : 'pages/updateProject.html',
                         width : 300,
                         height : 200,
                         template : 'none',
@@ -308,7 +339,7 @@ const mainTemplate = [
                     })
                     listWindow.webContents.on('did-finish-load',async()=>{
                         let x = await getList();
-                        listWindow.webContents.send('todo:send',x);
+                        listWindow.webContents.send('todo:send',x,'delete');
                     })
                     listWindow.on('close',()=>{
                         listWindow = null;
